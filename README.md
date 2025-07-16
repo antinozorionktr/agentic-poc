@@ -54,7 +54,33 @@
 - Ubuntu server
 - RTX 3070/4070 (real-time multi-camera processing)
 
-## 3 - Manufacturing Quality Control (Anomaly Detection)
+## 3. Agricultural Monitoring Platform (Segmentation)
+ 
+**Tech Stack:** 
+
+- YOLOv8-Seg
+- GDAL
+- FastAPI
+- PostgreSQL 
+
+**Data Sources:**
+ 
+- Agriculture-Vision dataset
+- Sentinel-2 satellite imagery
+- Drone crop footage 
+
+**Key Features:** 
+
+- Crop Segmentation
+- Health Assessment 
+- Yield prediction
+- Disease detection 
+
+**Hardware:** 
+
+Ubuntu server + RTX 3080/4080 (large image processing)
+
+## 4 - Manufacturing Quality Control (Anomaly Detection)
  
 **Tech Stack:** 
 
@@ -75,7 +101,7 @@ YOLOv8 + OpenCV + MLflow + Docker
 
 Ubuntu server + RTX 3070/4070 (industrial deployment)
 
-## 4 - Fitness & Health Tracker (Pose Estimation)
+## 5 - Fitness & Health Tracker (Pose Estimation)
  
 **Tech Stack:** 
 
