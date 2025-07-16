@@ -78,13 +78,17 @@
 
 **Hardware:** 
 
-Ubuntu server + RTX 3080/4080 (large image processing)
+- Ubuntu Server
+- RTX 3080/4080 (large image processing)
 
 ## 4 - Manufacturing Quality Control (Anomaly Detection)
  
 **Tech Stack:** 
 
-YOLOv8 + OpenCV + MLflow + Docker 
+- YOLOv8
+- OpenCV
+- MLflow
+- Docker 
 
 **Data Sources:**
  
@@ -95,17 +99,23 @@ YOLOv8 + OpenCV + MLflow + Docker
 **Key Features:** 
 
 - Defect detection, 
-- Quality scoring, automated inspection, production analytics 
+- Quality scoring
+- Automated inspection
+- Production analytics 
 
 **Hardware:** 
 
-Ubuntu server + RTX 3070/4070 (industrial deployment)
+- Ubuntu server
+- RTX 3070/4070 (industrial deployment)
 
 ## 5 - Fitness & Health Tracker (Pose Estimation)
  
 **Tech Stack:** 
 
-YOLOv8-Pose + MediaPipe + OpenCV + FastAPI 
+- YOLOv8-Pose
+- MediaPipe
+- OpenCV
+- FastAPI 
 
 **Data Sources:**
  
@@ -115,12 +125,16 @@ YOLOv8-Pose + MediaPipe + OpenCV + FastAPI
 
 **Key Features:** 
 
-Pose detection, form analysis, rep counting, progress tracking 
+- Pose detection
+- Form analysis
+- Rep counting, 
+- Progress tracking 
 
 **Hardware:** 
 
-Ubuntu server + RTX 3060/4060 (real-time pose processing)
- 
+- Ubuntu server
+- RTX 3060/4060 (real-time pose processing)
+
 ## Hardware Recommendations
  
 **Minimum:** 
