@@ -1,0 +1,67 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+env/
+venv/
+ENV/
+
+# === Jupyter / notebooks ===
+.ipynb_checkpoints/
+
+# === Environment & Config ===
+.env
+.env.*
+*.secret
+
+# === Logs & Runtime ===
+*.log
+*.pid
+*.sqlite3
+*.db
+
+# === OS / Editor ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Model / ML Files ===
+*.pt
+*.pth
+*.h5
+*.onnx
+*.tflite
+*.ckpt
+runs/  # YOLO output folder
+
+# === Data / Satellite / Raster ===
+*.tif
+*.tiff
+*.jp2
+*.zipByteTrack & Other cloned folders
+*.tar.gz
+
+# === Git ===
+*/.git
+*.orig
+
+# === Temporary / backup ===
+*.bak
+*.tmp
+*~
+
+# === ByteTrack & Other cloned folders ===
+ByteTrack/.git/
+Automatic-License-Plate-Recognition-using-YOLOv8/.git/
+
+# === Data ===
+data/
+coco/
+smart-security-system/coco2017labels-segments.zip
+*.mp4
