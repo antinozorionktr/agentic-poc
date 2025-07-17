@@ -24,7 +24,7 @@ if 'plate_history' not in st.session_state:
 if 'processing_complete' not in st.session_state:
     st.session_state.processing_complete = False
 
-st.title("🚦Traffic Monitoring System")
+st.title("🚦 Traffic Monitoring System")
 st.markdown("Real-time vehicle detection, tracking, and license plate recognition")
 
 # Create tabs
