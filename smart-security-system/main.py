@@ -1,722 +1,484 @@
+import streamlit as st
 import cv2
 import numpy as np
-from ultralytics import YOLO
-import torch
-from datetime import datetime, timedelta
-import logging
-from typing import List, Dict, Tuple, Optional
-import json
+from PIL import Image
+import tempfile
 import os
-from pathlib import Path
-import threading
+from main import SecuritySystem
 import time
-from collections import deque
-import math
+import threading
+from datetime import datetime
+import pandas as pd
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Page configuration
+st.set_page_config(
+    page_title="Smart Security System",
+    page_icon="🔒",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-class DeepSORTTracker:
-    """Simple tracking implementation for person detection continuity"""
-    
-    def __init__(self, max_disappeared=30, max_distance=100):
-        self.next_id = 0
-        self.objects = {}
-        self.disappeared = {}
-        self.max_disappeared = max_disappeared
-        self.max_distance = max_distance
-    
-    def register(self, centroid):
-        """Register a new object with the next available ID"""
-        self.objects[self.next_id] = centroid
-        self.disappeared[self.next_id] = 0
-        self.next_id += 1
-    
-    def deregister(self, object_id):
-        """Deregister an object ID"""
-        del self.objects[object_id]
-        del self.disappeared[object_id]
-    
-    def update(self, rects):
-        """Update tracker with new detections"""
-        if len(rects) == 0:
-            # Mark all existing objects as disappeared
-            for object_id in list(self.disappeared.keys()):
-                self.disappeared[object_id] += 1
-                if self.disappeared[object_id] > self.max_disappeared:
-                    self.deregister(object_id)
-            return self.objects
-        
-        # Initialize array of input centroids
-        input_centroids = np.zeros((len(rects), 2), dtype="int")
-        
-        for (i, (x1, y1, x2, y2)) in enumerate(rects):
-            cx = int((x1 + x2) / 2.0)
-            cy = int((y1 + y2) / 2.0)
-            input_centroids[i] = (cx, cy)
-        
-        if len(self.objects) == 0:
-            for i in range(len(input_centroids)):
-                self.register(input_centroids[i])
-        else:
-            object_centroids = list(self.objects.values())
-            object_ids = list(self.objects.keys())
-            
-            # Compute distance matrix
-            D = np.linalg.norm(np.array(object_centroids)[:, np.newaxis] - input_centroids, axis=2)
-            
-            # Find minimum values and sort by distance
-            rows = D.min(axis=1).argsort()
-            cols = D.argmin(axis=1)[rows]
-            
-            used_row_indices = set()
-            used_col_indices = set()
-            
-            for (row, col) in zip(rows, cols):
-                if row in used_row_indices or col in used_col_indices:
-                    continue
-                
-                if D[row, col] > self.max_distance:
-                    continue
-                
-                object_id = object_ids[row]
-                self.objects[object_id] = input_centroids[col]
-                self.disappeared[object_id] = 0
-                
-                used_row_indices.add(row)
-                used_col_indices.add(col)
-            
-            unused_row_indices = set(range(0, D.shape[0])).difference(used_row_indices)
-            unused_col_indices = set(range(0, D.shape[1])).difference(used_col_indices)
-            
-            if D.shape[0] >= D.shape[1]:
-                for row in unused_row_indices:
-                    object_id = object_ids[row]
-                    self.disappeared[object_id] += 1
-                    
-                    if self.disappeared[object_id] > self.max_disappeared:
-                        self.deregister(object_id)
-            else:
-                for col in unused_col_indices:
-                    self.register(input_centroids[col])
-        
-        return self.objects
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        text-align: center;
+        color: #1f77b4;
+        margin-bottom: 2rem;
+    }
+    .status-box {
+        padding: 1rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        text-align: center;
+        font-weight: bold;
+    }
+    .status-safe {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+    .status-alert {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #1f77b4;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-class BehaviorAnalyzer:
-    """Analyze person behavior for security assessment"""
-    
-    def __init__(self):
-        self.person_tracks = {}
-        self.loitering_threshold = 30  # seconds
-        self.speed_threshold = 50  # pixels per second
-        
-    def analyze_behavior(self, person_id: int, bbox: Tuple[int, int, int, int], timestamp: datetime) -> Dict[str, any]:
-        """Analyze behavior patterns for a tracked person"""
-        x1, y1, x2, y2 = bbox
-        centroid = ((x1 + x2) // 2, (y1 + y2) // 2)
-        
-        if person_id not in self.person_tracks:
-            self.person_tracks[person_id] = {
-                'positions': deque(maxlen=50),
-                'timestamps': deque(maxlen=50),
-                'first_seen': timestamp,
-                'behaviors': []
-            }
-        
-        track = self.person_tracks[person_id]
-        track['positions'].append(centroid)
-        track['timestamps'].append(timestamp)
-        
-        behaviors = []
-        
-        # Calculate duration
-        duration = (timestamp - track['first_seen']).total_seconds()
-        
-        # Check for loitering
-        if len(track['positions']) > 1:
-            if duration > self.loitering_threshold:
-                # Check if person has moved significantly
-                first_pos = track['positions'][0]
-                current_pos = track['positions'][-1]
-                distance = math.sqrt((current_pos[0] - first_pos[0])**2 + (current_pos[1] - first_pos[1])**2)
-                
-                if distance < 100:  # Less than 100 pixels movement
-                    behaviors.append("loitering")
-        
-        # Check for unusual speed
-        if len(track['positions']) > 5:
-            recent_positions = list(track['positions'])[-5:]
-            recent_timestamps = list(track['timestamps'])[-5:]
-            
-            total_distance = 0
-            for i in range(1, len(recent_positions)):
-                pos1, pos2 = recent_positions[i-1], recent_positions[i]
-                distance = math.sqrt((pos2[0] - pos1[0])**2 + (pos2[1] - pos1[1])**2)
-                total_distance += distance
-            
-            time_diff = (recent_timestamps[-1] - recent_timestamps[0]).total_seconds()
-            if time_diff > 0:
-                speed = total_distance / time_diff
-                if speed > self.speed_threshold:
-                    behaviors.append("fast_movement")
-        
-        # Check for restricted area (example: top-left corner)
-        if centroid[0] < 100 and centroid[1] < 100:
-            behaviors.append("restricted_area")
-        
-        track['behaviors'] = behaviors
-        
-        return {
-            'behaviors': behaviors,
-            'duration': duration,
-            'position_history': list(track['positions']),
-            'risk_level': self._calculate_risk_level(behaviors, duration)
-        }
-    
-    def _calculate_risk_level(self, behaviors: List[str], duration: float) -> str:
-        """Calculate risk level based on behaviors"""
-        risk_score = 0
-        
-        if "loitering" in behaviors:
-            risk_score += 3
-        if "fast_movement" in behaviors:
-            risk_score += 2
-        if "restricted_area" in behaviors:
-            risk_score += 4
-        
-        if duration > 60:  # More than 1 minute
-            risk_score += 1
-        
-        if risk_score >= 5:
-            return "high"
-        elif risk_score >= 3:
-            return "medium"
-        else:
-            return "low"
-
-class AlertSystem:
-    """Manage security alerts and notifications"""
-    
-    def __init__(self):
-        self.alerts = []
-        self.alert_cooldown = {}
-        self.cooldown_period = 30  # seconds
-    
-    def create_alert(self, alert_type: str, message: str, severity: str = "medium", 
-                    location: str = "Unknown", metadata: Dict = None) -> Dict:
-        """Create a new security alert"""
-        
-        # Check cooldown to prevent spam
-        current_time = datetime.now()
-        cooldown_key = f"{alert_type}_{location}"
-        
-        if cooldown_key in self.alert_cooldown:
-            last_alert_time = self.alert_cooldown[cooldown_key]
-            if (current_time - last_alert_time).total_seconds() < self.cooldown_period:
-                return None
-        
-        alert = {
-            'id': len(self.alerts),
-            'timestamp': current_time,
-            'type': alert_type,
-            'message': message,
-            'severity': severity,
-            'location': location,
-            'metadata': metadata or {},
-            'status': 'active'
-        }
-        
-        self.alerts.append(alert)
-        self.alert_cooldown[cooldown_key] = current_time
-        
-        logger.warning(f"SECURITY ALERT: {alert_type} - {message}")
-        
-        return alert
-    
-    def get_active_alerts(self) -> List[Dict]:
-        """Get all active alerts"""
-        return [alert for alert in self.alerts if alert['status'] == 'active']
-    
-    def resolve_alert(self, alert_id: int):
-        """Mark an alert as resolved"""
-        for alert in self.alerts:
-            if alert['id'] == alert_id:
-                alert['status'] = 'resolved'
-                break
-
-class SecuritySystem:
-    """Main security system class integrating all components"""
-    
-    def __init__(self, model_path: str = None, device: str = None):
-        """Initialize the security system"""
-        
-        # Set device
-        if device is None:
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        else:
-            self.device = device
-        
-        logger.info(f"Initializing SecuritySystem on device: {self.device}")
-        
-        # Load YOLO model
-        try:
-            if model_path and os.path.exists(model_path):
-                self.model = YOLO(model_path)
-            else:
-                # Use pre-trained YOLOv8 model
-                self.model = YOLO('yolov8n.pt')  # nano version for speed
-            logger.info("YOLO model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load YOLO model: {e}")
-            raise
-        
-        # Initialize components
-        self.tracker = DeepSORTTracker()
-        self.behavior_analyzer = BehaviorAnalyzer()
-        self.alert_system = AlertSystem()
-        
-        # Configuration
-        self.config = {
-            'confidence_threshold': 0.5,
-            'iou_threshold': 0.4,
-            'alert_sensitivity': 'medium',
-            'enable_notifications': True,
-            'person_class_id': 0  # COCO person class
-        }
-        
-        # Runtime statistics
-        self.stats = {
-            'frames_processed': 0,
-            'total_detections': 0,
-            'alerts_generated': 0,
-            'start_time': datetime.now()
-        }
-    
-    def update_settings(self, new_settings: Dict):
-        """Update system configuration"""
-        self.config.update(new_settings)
-        logger.info(f"Settings updated: {new_settings}")
-    
-    def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, List[Dict]]:
-        """Process a single frame for person detection and analysis"""
-        
-        start_time = time.time()
-        
-        try:
-            # Run YOLO detection
-            results = self.model(frame, conf=self.config['confidence_threshold'], 
-                               iou=self.config['iou_threshold'], verbose=False)
-            
-            detections = []
-            person_boxes = []
-            
-            # Process detection results
-            if len(results) > 0 and results[0].boxes is not None:
-                boxes = results[0].boxes
-                
-                for box in boxes:
-                    # Filter for person class only
-                    if int(box.cls) == self.config['person_class_id']:
-                        # Extract box coordinates and confidence
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                        confidence = float(box.conf[0])
-                        
-                        person_boxes.append([x1, y1, x2, y2])
-                        
-                        detection = {
-                            'class': 'person',
-                            'confidence': confidence,
-                            'bbox': [x1, y1, x2, y2],
-                            'timestamp': datetime.now()
-                        }
-                        detections.append(detection)
-            
-            # Update tracker
-            tracked_objects = self.tracker.update(person_boxes)
-            
-            # Analyze behavior for tracked persons
-            current_time = datetime.now()
-            for person_id, centroid in tracked_objects.items():
-                # Find corresponding detection
-                for detection in detections:
-                    bbox = detection['bbox']
-                    det_centroid = ((bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2)
-                    
-                    # Check if this detection matches the tracked object
-                    distance = math.sqrt((centroid[0] - det_centroid[0])**2 + 
-                                       (centroid[1] - det_centroid[1])**2)
-                    
-                    if distance < 50:  # Threshold for matching
-                        try:
-                            # Analyze behavior
-                            behavior_analysis = self.behavior_analyzer.analyze_behavior(
-                                person_id, tuple(bbox), current_time
-                            )
-                            
-                            detection['person_id'] = person_id
-                            detection['behavior_analysis'] = behavior_analysis
-                            
-                            # Generate alerts based on behavior
-                            self._check_and_generate_alerts(person_id, behavior_analysis, bbox)
-                        except Exception as e:
-                            logger.error(f"Error in behavior analysis: {e}")
-                            # Continue processing without behavior analysis
-                            detection['person_id'] = person_id
-                            detection['behavior_analysis'] = {'behaviors': [], 'risk_level': 'low'}
-                        break
-            
-            # Draw detections and tracking on frame
-            processed_frame = self._draw_detections(frame.copy(), detections, tracked_objects)
-            
-            # Update statistics
-            self.stats['frames_processed'] += 1
-            self.stats['total_detections'] += len(detections)
-            
-            processing_time = time.time() - start_time
-            logger.debug(f"Frame processed in {processing_time:.3f}s, {len(detections)} persons detected")
-            
-            return processed_frame, detections
-            
-        except Exception as e:
-            logger.error(f"Error processing frame: {e}")
-            # Return original frame with error message
-            error_frame = frame.copy()
-            cv2.putText(error_frame, f"Processing Error: {str(e)[:50]}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            return error_frame, []
-    
-    def _check_and_generate_alerts(self, person_id: int, behavior_analysis: Dict, bbox: List[int]):
-        """Check behavior analysis and generate appropriate alerts"""
-        
-        behaviors = behavior_analysis.get('behaviors', [])
-        risk_level = behavior_analysis.get('risk_level', 'low')
-        duration = behavior_analysis.get('duration', 0)
-        
-        # Alert for loitering
-        if 'loitering' in behaviors:
-            self.alert_system.create_alert(
-                'Loitering Detected',
-                f'Person {person_id} has been loitering for {duration:.1f} seconds',
-                'medium',
-                f'Area: {bbox[0]}, {bbox[1]}',
-                {'person_id': person_id, 'duration': duration}
-            )
-        
-        # Alert for restricted area
-        if 'restricted_area' in behaviors:
-            self.alert_system.create_alert(
-                'Restricted Area Access',
-                f'Person {person_id} detected in restricted area',
-                'high',
-                f'Restricted Zone',
-                {'person_id': person_id, 'bbox': bbox}
-            )
-        
-        # Alert for fast movement
-        if 'fast_movement' in behaviors:
-            self.alert_system.create_alert(
-                'Suspicious Movement',
-                f'Person {person_id} moving at unusual speed',
-                'medium',
-                f'Area: {bbox[0]}, {bbox[1]}',
-                {'person_id': person_id}
-            )
-        
-        # High risk alert
-        if risk_level == 'high':
-            self.alert_system.create_alert(
-                'High Risk Detection',
-                f'Person {person_id} classified as high risk',
-                'high',
-                f'Area: {bbox[0]}, {bbox[1]}',
-                {'person_id': person_id, 'risk_level': risk_level}
-            )
-        
-        self.stats['alerts_generated'] = len(self.alert_system.alerts)
-    
-    def _draw_detections(self, frame: np.ndarray, detections: List[Dict], 
-                        tracked_objects: Dict) -> np.ndarray:
-        """Draw detection boxes and information on frame"""
-        
-        # Color scheme
-        colors = {
-            'low': (0, 255, 0),      # Green
-            'medium': (0, 255, 255),  # Yellow
-            'high': (0, 0, 255)       # Red
-        }
-        
-        # Draw detection boxes
-        for detection in detections:
-            x1, y1, x2, y2 = detection['bbox']
-            confidence = detection['confidence']
-            person_id = detection.get('person_id', 'Unknown')
-            
-            # Get risk level color
-            behavior_analysis = detection.get('behavior_analysis', {})
-            risk_level = behavior_analysis.get('risk_level', 'low')
-            color = colors.get(risk_level, (255, 255, 255))
-            
-            # Draw bounding box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            
-            # Prepare label text
-            label = f'Person {person_id}: {confidence:.2f}'
-            if behavior_analysis:
-                behaviors = behavior_analysis.get('behaviors', [])
-                if behaviors:
-                    label += f' ({", ".join(behaviors)})'
-            
-            # Draw label background
-            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-            cv2.rectangle(frame, (x1, y1 - label_size[1] - 10), 
-                         (x1 + label_size[0], y1), color, -1)
-            
-            # Draw label text
-            cv2.putText(frame, label, (x1, y1 - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Draw risk level indicator
-            risk_text = f'Risk: {risk_level.upper()}'
-            cv2.putText(frame, risk_text, (x1, y2 + 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        # Draw tracking trails
-        for person_id, centroid in tracked_objects.items():
-            if person_id in self.behavior_analyzer.person_tracks:
-                positions = list(self.behavior_analyzer.person_tracks[person_id]['positions'])
-                
-                # Draw trail
-                for i in range(1, len(positions)):
-                    cv2.line(frame, positions[i-1], positions[i], (128, 128, 128), 2)
-                
-                # Draw current position
-                cv2.circle(frame, centroid, 5, (255, 0, 255), -1)
-        
-        # Draw system info
-        self._draw_system_info(frame)
-        
-        return frame
-    
-    def _draw_system_info(self, frame: np.ndarray):
-        """Draw system information overlay"""
-        
-        height, width = frame.shape[:2]
-        
-        # System status
-        uptime = datetime.now() - self.stats['start_time']
-        uptime_str = str(uptime).split('.')[0]  # Remove microseconds
-        
-        info_lines = [
-            f"Security System - Status: ACTIVE",
-            f"Uptime: {uptime_str}",
-            f"Frames: {self.stats['frames_processed']}",
-            f"Detections: {self.stats['total_detections']}",
-            f"Alerts: {self.stats['alerts_generated']}",
-            f"Device: {self.device.upper()}"
-        ]
-        
-        # Draw semi-transparent background
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (width - 300, 10), (width - 10, 150), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-        
-        # Draw info text
-        for i, line in enumerate(info_lines):
-            y_pos = 30 + i * 20
-            cv2.putText(frame, line, (width - 290, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-        
-        # Draw active alerts indicator
-        active_alerts = len(self.alert_system.get_active_alerts())
-        if active_alerts > 0:
-            alert_text = f"ACTIVE ALERTS: {active_alerts}"
-            cv2.putText(frame, alert_text, (10, height - 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    
-    def process_video_file(self, video_path: str, output_path: str = None) -> Dict:
-        """Process entire video file"""
-        
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video file: {video_path}")
-        
-        # Get video properties
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Setup video writer if output path provided
-        writer = None
-        if output_path:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        logger.info(f"Processing video: {video_path}")
-        logger.info(f"Properties: {width}x{height}, {fps} FPS, {total_frames} frames")
-        
-        frame_count = 0
-        detection_summary = []
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # Process frame
-                processed_frame, detections = self.process_frame(frame)
-                
-                # Save frame if writer is available
-                if writer:
-                    writer.write(processed_frame)
-                
-                # Store detection summary
-                if detections:
-                    detection_summary.append({
-                        'frame': frame_count,
-                        'timestamp': frame_count / fps,
-                        'detections': len(detections),
-                        'persons': [d for d in detections]
-                    })
-                
-                frame_count += 1
-                
-                # Log progress
-                if frame_count % 100 == 0:
-                    progress = (frame_count / total_frames) * 100
-                    logger.info(f"Progress: {progress:.1f}% ({frame_count}/{total_frames})")
-        
-        finally:
-            cap.release()
-            if writer:
-                writer.release()
-        
-        # Compile results
-        results = {
-            'input_file': video_path,
-            'output_file': output_path,
-            'total_frames': total_frames,
-            'processed_frames': frame_count,
-            'fps': fps,
-            'detection_summary': detection_summary,
-            'total_detections': sum(len(d['persons']) for d in detection_summary),
-            'alerts_generated': len(self.alert_system.alerts),
-            'processing_stats': self.stats
-        }
-        
-        logger.info(f"Video processing complete: {frame_count} frames processed")
-        logger.info(f"Total detections: {results['total_detections']}")
-        logger.info(f"Alerts generated: {results['alerts_generated']}")
-        
-        return results
-    
-    def get_system_status(self) -> Dict:
-        """Get current system status and statistics"""
-        
-        uptime = datetime.now() - self.stats['start_time']
-        active_alerts = self.alert_system.get_active_alerts()
-        
-        return {
-            'status': 'active',
-            'uptime': str(uptime).split('.')[0],
-            'device': self.device,
-            'configuration': self.config,
-            'statistics': {
-                **self.stats,
-                'fps': self.stats['frames_processed'] / max(uptime.total_seconds(), 1),
-                'alerts_active': len(active_alerts),
-                'alerts_total': len(self.alert_system.alerts)
-            },
-            'active_alerts': active_alerts,
-            'tracked_persons': len(self.behavior_analyzer.person_tracks)
-        }
-    
-    def save_configuration(self, config_path: str):
-        """Save current configuration to file"""
-        config_data = {
-            'config': self.config,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        with open(config_path, 'w') as f:
-            json.dump(config_data, f, indent=2)
-        
-        logger.info(f"Configuration saved to: {config_path}")
-    
-    def load_configuration(self, config_path: str):
-        """Load configuration from file"""
-        if not os.path.exists(config_path):
-            logger.warning(f"Configuration file not found: {config_path}")
-            return
-        
-        try:
-            with open(config_path, 'r') as f:
-                config_data = json.load(f)
-            
-            self.config.update(config_data.get('config', {}))
-            logger.info(f"Configuration loaded from: {config_path}")
-            
-        except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
+# Initialize session state
+if 'security_system' not in st.session_state:
+    st.session_state.security_system = SecuritySystem()
+if 'alerts' not in st.session_state:
+    st.session_state.alerts = []
+if 'detection_history' not in st.session_state:
+    st.session_state.detection_history = []
+if 'is_monitoring' not in st.session_state:
+    st.session_state.is_monitoring = False
 
 def main():
-    """Main function for testing the security system"""
+    # Header
+    st.markdown('<h1 class="main-header">🔒 Smart Security System</h1>', unsafe_allow_html=True)
     
-    # Initialize security system
-    security_system = SecuritySystem()
+    # Sidebar configuration
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # Detection settings
+        st.subheader("Detection Settings")
+        confidence_threshold = st.slider("Confidence Threshold", 0.1, 1.0, 0.5, 0.1)
+        iou_threshold = st.slider("IoU Threshold", 0.1, 1.0, 0.4, 0.1)
+        
+        # Alert settings
+        st.subheader("Alert Settings")
+        alert_sensitivity = st.selectbox("Alert Sensitivity", ["Low", "Medium", "High"], index=1)
+        enable_notifications = st.checkbox("Enable Notifications", True)
+        
+        # Update system settings
+        st.session_state.security_system.update_settings({
+            'confidence_threshold': confidence_threshold,
+            'iou_threshold': iou_threshold,
+            'alert_sensitivity': alert_sensitivity,
+            'enable_notifications': enable_notifications
+        })
+        
+        st.divider()
+        
+        # System status
+        st.subheader("📊 System Status")
+        total_detections = len(st.session_state.detection_history)
+        total_alerts = len(st.session_state.alerts)
+        
+        st.metric("Total Detections", total_detections)
+        st.metric("Active Alerts", total_alerts)
+        
+        if st.button("🗑️ Clear History"):
+            st.session_state.alerts = []
+            st.session_state.detection_history = []
+            st.rerun()
+
+    # Main content area
+    tab1, tab2, tab3, tab4 = st.tabs(["🎥 Live Monitoring", "📁 File Upload", "📊 Analytics", "⚠️ Alerts"])
     
-    print("Smart Security System Initialized")
-    print("=" * 50)
-    print(f"Device: {security_system.device}")
-    print(f"Model: {security_system.model.model}")
-    print("=" * 50)
+    with tab1:
+        live_monitoring_tab()
     
-    # Test with webcam
-    cap = cv2.VideoCapture(0)
+    with tab2:
+        file_upload_tab()
     
-    if not cap.isOpened():
-        print("Error: Could not open webcam")
+    with tab3:
+        analytics_tab()
+    
+    with tab4:
+        alerts_tab()
+
+def live_monitoring_tab():
+    st.header("Live Camera Monitoring")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col2:
+        st.subheader("Controls")
+        
+        camera_source = st.selectbox("Camera Source", ["Webcam (0)", "External Camera (1)", "IP Camera"])
+        
+        if camera_source == "IP Camera":
+            ip_url = st.text_input("IP Camera URL", "rtsp://admin:password@192.168.1.100:554/stream")
+            camera_index = ip_url
+        else:
+            camera_index = 0 if "Webcam" in camera_source else 1
+        
+        if st.button("🎥 Start Monitoring"):
+            st.session_state.is_monitoring = True
+            
+        if st.button("⏹️ Stop Monitoring"):
+            st.session_state.is_monitoring = False
+    
+    with col1:
+        if st.session_state.is_monitoring:
+            st.subheader("Live Feed")
+            
+            # Placeholder for video stream
+            video_placeholder = st.empty()
+            status_placeholder = st.empty()
+            
+            try:
+                cap = cv2.VideoCapture(camera_index)
+                
+                if not cap.isOpened():
+                    st.error("Could not open camera. Please check your camera connection.")
+                    return
+                
+                frame_count = 0
+                while st.session_state.is_monitoring:
+                    ret, frame = cap.read()
+                    if not ret:
+                        st.error("Failed to capture frame from camera.")
+                        break
+                    
+                    # Process frame through security system
+                    processed_frame, detections = st.session_state.security_system.process_frame(frame)
+                    
+                    # Update detection history
+                    if detections:
+                        timestamp = datetime.now()
+                        for detection in detections:
+                            st.session_state.detection_history.append({
+                                'timestamp': timestamp,
+                                'type': detection['class'],
+                                'confidence': detection['confidence'],
+                                'bbox': detection['bbox']
+                            })
+                    
+                    # Convert frame for display
+                    processed_frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+                    video_placeholder.image(processed_frame_rgb, caption="Live Security Feed", use_column_width=True)
+                    
+                    # Update status
+                    if detections:
+                        status_placeholder.markdown(
+                            '<div class="status-box status-alert">⚠️ PERSON DETECTED</div>',
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        status_placeholder.markdown(
+                            '<div class="status-box status-safe">✅ ALL CLEAR</div>',
+                            unsafe_allow_html=True
+                        )
+                    
+                    frame_count += 1
+                    time.sleep(0.1)  # Control frame rate
+                
+                cap.release()
+                
+            except Exception as e:
+                st.error(f"Error during live monitoring: {str(e)}")
+        else:
+            st.info("Click 'Start Monitoring' to begin live camera feed.")
+
+def file_upload_tab():
+    st.header("Upload Image or Video for Analysis")
+    
+    uploaded_file = st.file_uploader(
+        "Choose a file", 
+        type=['jpg', 'jpeg', 'png', 'mp4', 'avi', 'mov'],
+        help="Upload an image or video file for security analysis"
+    )
+    
+    if uploaded_file is not None:
+        file_extension = uploaded_file.name.split('.')[-1].lower()
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            tmp_file_path = tmp_file.name
+        
+        try:
+            if file_extension in ['jpg', 'jpeg', 'png']:
+                process_image(tmp_file_path, uploaded_file.name)
+            elif file_extension in ['mp4', 'avi', 'mov']:
+                process_video(tmp_file_path, uploaded_file.name)
+        finally:
+            os.unlink(tmp_file_path)
+
+def process_image(image_path, filename):
+    st.subheader(f"Analysis Results for: {filename}")
+    
+    # Load and display original image
+    image = cv2.imread(image_path)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Original Image")
+        st.image(image_rgb, use_column_width=True)
+    
+    with col2:
+        st.subheader("Detection Results")
+        
+        # Process image
+        with st.spinner("Analyzing image..."):
+            processed_image, detections = st.session_state.security_system.process_frame(image)
+            processed_image_rgb = cv2.cvtColor(processed_image, cv2.COLOR_BGR2RGB)
+        
+        st.image(processed_image_rgb, use_column_width=True)
+        
+        # Display detection summary
+        if detections:
+            st.success(f"Found {len(detections)} person(s)")
+            
+            for i, detection in enumerate(detections):
+                with st.expander(f"Person {i+1}"):
+                    st.write(f"**Confidence:** {detection['confidence']:.2%}")
+                    st.write(f"**Bounding Box:** {detection['bbox']}")
+                    st.write(f"**Classification:** {detection.get('behavior', 'Normal')}")
+        else:
+            st.info("No persons detected in the image")
+
+def process_video(video_path, filename):
+    st.subheader(f"Video Analysis: {filename}")
+    
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    
+    st.info(f"Video Info: {total_frames} frames, {fps} FPS")
+    
+    # Video processing controls
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        process_all = st.button("🎬 Process Entire Video")
+    with col2:
+        sample_frames = st.button("📸 Sample Frames")
+    with col3:
+        frame_number = st.number_input("Jump to Frame", 0, total_frames-1, 0)
+    
+    if process_all:
+        process_entire_video(cap, total_frames)
+    elif sample_frames:
+        process_sample_frames(cap, total_frames)
+    
+    # Frame-by-frame analysis
+    if st.button("Analyze Current Frame"):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        ret, frame = cap.read()
+        if ret:
+            processed_frame, detections = st.session_state.security_system.process_frame(frame)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), caption="Original Frame")
+            with col2:
+                st.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB), caption="Processed Frame")
+            
+            if detections:
+                st.success(f"Frame {frame_number}: {len(detections)} person(s) detected")
+    
+    cap.release()
+
+def process_entire_video(cap, total_frames):
+    st.subheader("Processing Entire Video...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    detection_timeline = []
+    frame_number = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Process every 10th frame to speed up analysis
+        if frame_number % 10 == 0:
+            processed_frame, detections = st.session_state.security_system.process_frame(frame)
+            
+            if detections:
+                detection_timeline.append({
+                    'frame': frame_number,
+                    'timestamp': frame_number / 30,  # Assuming 30 FPS
+                    'detections': len(detections)
+                })
+        
+        frame_number += 1
+        progress = frame_number / total_frames
+        progress_bar.progress(progress)
+        status_text.text(f"Processing frame {frame_number}/{total_frames}")
+    
+    # Display results
+    st.success("Video processing complete!")
+    
+    if detection_timeline:
+        df = pd.DataFrame(detection_timeline)
+        st.line_chart(df.set_index('timestamp')['detections'])
+        st.dataframe(df)
+    else:
+        st.info("No persons detected in the video")
+
+def process_sample_frames(cap, total_frames):
+    st.subheader("Sample Frame Analysis")
+    
+    # Sample 5 frames evenly distributed
+    sample_frames = [int(i * total_frames / 5) for i in range(5)]
+    
+    cols = st.columns(5)
+    
+    for i, frame_num in enumerate(sample_frames):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        ret, frame = cap.read()
+        
+        if ret:
+            processed_frame, detections = st.session_state.security_system.process_frame(frame)
+            
+            with cols[i]:
+                st.image(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB), 
+                        caption=f"Frame {frame_num}")
+                if detections:
+                    st.success(f"{len(detections)} detected")
+                else:
+                    st.info("No detection")
+
+def analytics_tab():
+    st.header("📊 Security Analytics")
+    
+    if not st.session_state.detection_history:
+        st.info("No detection data available. Start monitoring or upload files to see analytics.")
         return
     
-    print("Starting live monitoring... Press 'q' to quit")
+    # Create DataFrame from detection history
+    df = pd.DataFrame(st.session_state.detection_history)
+    df['hour'] = df['timestamp'].dt.hour
+    df['date'] = df['timestamp'].dt.date
     
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Process frame
-            processed_frame, detections = security_system.process_frame(frame)
-            
-            # Display result
-            cv2.imshow('Smart Security System', processed_frame)
-            
-            # Print detection info
-            if detections:
-                print(f"Frame: {security_system.stats['frames_processed']} - "
-                      f"Persons detected: {len(detections)}")
-            
-            # Check for quit
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
     
-    except KeyboardInterrupt:
-        print("\nStopping security system...")
+    with col1:
+        st.metric("Total Detections", len(df))
+    with col2:
+        avg_confidence = df['confidence'].mean()
+        st.metric("Avg Confidence", f"{avg_confidence:.2%}")
+    with col3:
+        unique_days = df['date'].nunique()
+        st.metric("Active Days", unique_days)
+    with col4:
+        peak_hour = df['hour'].mode().iloc[0] if not df.empty else 0
+        st.metric("Peak Hour", f"{peak_hour}:00")
     
-    finally:
-        cap.release()
-        cv2.destroyAllWindows()
+    # Visualizations
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Detections by Hour")
+        hourly_counts = df.groupby('hour').size()
+        st.bar_chart(hourly_counts)
+    
+    with col2:
+        st.subheader("Daily Detection Trends")
+        daily_counts = df.groupby('date').size()
+        st.line_chart(daily_counts)
+    
+    # Detailed data table
+    st.subheader("Recent Detections")
+    recent_detections = df.tail(20).copy()
+    recent_detections['timestamp'] = recent_detections['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    st.dataframe(recent_detections, use_container_width=True)
+
+def alerts_tab():
+    st.header("⚠️ Security Alerts")
+    
+    # Alert summary
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Alerts", len(st.session_state.alerts))
+    with col2:
+        active_alerts = sum(1 for alert in st.session_state.alerts if alert.get('status') == 'active')
+        st.metric("Active Alerts", active_alerts)
+    with col3:
+        if st.session_state.alerts:
+            latest_alert = max(st.session_state.alerts, key=lambda x: x['timestamp'])
+            time_diff = datetime.now() - latest_alert['timestamp']
+            st.metric("Last Alert", f"{time_diff.seconds // 60}m ago")
+        else:
+            st.metric("Last Alert", "Never")
+    
+    # Alert configuration
+    with st.expander("🔧 Alert Configuration"):
+        col1, col2 = st.columns(2)
         
-        # Print final statistics
-        status = security_system.get_system_status()
-        print("\nFinal Statistics:")
-        print(f"Uptime: {status['uptime']}")
-        print(f"Frames processed: {status['statistics']['frames_processed']}")
-        print(f"Total detections: {status['statistics']['total_detections']}")
-        print(f"Alerts generated: {status['statistics']['alerts_total']}")
+        with col1:
+            alert_types = st.multiselect(
+                "Alert Types",
+                ["Person Detection", "Loitering", "Unusual Movement", "After Hours"],
+                default=["Person Detection"]
+            )
+        
+        with col2:
+            notification_methods = st.multiselect(
+                "Notification Methods",
+                ["Email", "SMS", "Push Notification", "Sound Alert"],
+                default=["Sound Alert"]
+            )
+    
+    # Recent alerts
+    if st.session_state.alerts:
+        st.subheader("Recent Alerts")
+        
+        for alert in reversed(st.session_state.alerts[-10:]):  # Show last 10 alerts
+            timestamp = alert['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+            alert_type = alert.get('type', 'Unknown')
+            severity = alert.get('severity', 'Medium')
+            
+            # Color code by severity
+            if severity == 'High':
+                alert_color = '🔴'
+            elif severity == 'Medium':
+                alert_color = '🟡'
+            else:
+                alert_color = '🟢'
+            
+            with st.expander(f"{alert_color} {alert_type} - {timestamp}"):
+                st.write(f"**Severity:** {severity}")
+                st.write(f"**Message:** {alert.get('message', 'No details available')}")
+                st.write(f"**Location:** {alert.get('location', 'Unknown')}")
+                
+                if alert.get('status') == 'active':
+                    if st.button(f"Mark as Resolved", key=f"resolve_{alert['timestamp']}"):
+                        alert['status'] = 'resolved'
+                        st.rerun()
+    else:
+        st.info("No alerts generated yet. The system will display alerts when suspicious activity is detected.")
 
 if __name__ == "__main__":
     main()
