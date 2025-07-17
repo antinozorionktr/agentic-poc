@@ -25,6 +25,8 @@
 - Ubuntu server
 - RTX 3060/4060 (8GB VRAM sufficient)
 
+##
+
 *Steps To Run*
 
 - Clone the repository
