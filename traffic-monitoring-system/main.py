@@ -184,25 +184,82 @@ class EnhancedSORTTracker:
         
         return 0.0
 
-# Enhanced License Plate processor with better preprocessing
+# Enhanced License Plate processor with international support
 class EnhancedLicensePlateProcessor:
-    def __init__(self):
-        # Initialize the OCR reader with GPU if available
+    def __init__(self, languages=['en'], country='auto'):
+        # Initialize the OCR reader with multiple languages
         if OCR_AVAILABLE:
             try:
                 import torch
                 gpu_available = torch.cuda.is_available()
-                self.reader = easyocr.Reader(['en'], gpu=gpu_available)
-                print(f"EasyOCR initialized with GPU: {gpu_available}")
+
+                # Language mapping for different regions
+                language_sets = {
+                    'europe': ['en', 'de', 'fr', 'es', 'it', 'pl', 'nl', 'pt', 'cs', 'ro'],
+                    'asia': ['en', 'ch_sim', 'ch_tra', 'ja', 'ko', 'th', 'vi', 'id', 'ms'],
+                    'middle_east': ['en', 'ar', 'fa', 'he', 'tr'],
+                    'cyrillic': ['en', 'ru', 'uk', 'bg', 'sr', 'mk'],
+                    'americas': ['en', 'es', 'pt', 'fr'],
+                    'india': ['en', 'hi', 'mr', 'ta', 'te', 'bn', 'gu', 'kn', 'ml', 'or', 'pa']
+                }
+
+                # Select appropriate languages based on country
+                if country == 'auto':
+                    selected_languages = ['en', 'ch_sim', 'ar', 'ru', 'hi', 'es', 'de']
+                elif country in language_sets:
+                    selected_languages = language_sets[country]
+                else:
+                    selected_languages = languages
+
+                # EasyOCR language groups
+                latin_langs = {
+                    'en', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'cs', 'ro',
+                    'tr', 'ar', 'ru', 'uk', 'bg', 'sr', 'mk', 'fa', 'hi', 'bn', 'ta',
+                    'te', 'mr', 'gu', 'kn', 'ml', 'or', 'pa', 'id', 'ms', 'vi'
+                }
+                cjk_langs = {'ch_sim', 'ch_tra', 'ja', 'ko', 'th'}
+
+                # Filter incompatible combinations
+                if any(lang in cjk_langs for lang in selected_languages):
+                    selected_languages = [lang for lang in selected_languages if lang in cjk_langs]
+                    if 'en' not in selected_languages:
+                        selected_languages.append('en')
+                else:
+                    selected_languages = [lang for lang in selected_languages if lang in latin_langs]
+
+                # Remove duplicates and limit to 10 languages
+                selected_languages = list(set(selected_languages))[:10]
+
+                self.reader = easyocr.Reader(selected_languages, gpu=gpu_available)
+                print(f"EasyOCR initialized with languages: {selected_languages}, GPU: {gpu_available}")
             except Exception as e:
                 print(f"EasyOCR initialization failed: {e}")
                 self.reader = None
         else:
             self.reader = None
         
-        # Mapping dictionaries for character conversion
-        self.dict_char_to_int = {'O': '0', 'I': '1', 'J': '3', 'A': '4', 'G': '6', 'S': '5'}
-        self.dict_int_to_char = {'0': 'O', '1': 'I', '3': 'J', '4': 'A', '6': 'G', '5': 'S'}
+        # Country-specific plate patterns
+        self.country_patterns = {
+            'USA': [
+                r'^[A-Z0-9]{1,7}$',
+                r'^[A-Z]{1,3}[-\s]?[A-Z0-9]{1,4}$',
+            ],
+            'FI': [
+                r'^[A-Z]{2,3}-\d{1,3}$',  # e.g., IPP-443
+            ],
+            'DE': [
+                r'^[A-Z]{1,3}-[A-Z]{1,2} \d{1,4}$',  # e.g., B-MA 1234
+            ],
+            'UK': [
+                r'^[A-Z]{2}\d{2} ?[A-Z]{3}$',  # e.g., AB12 XYZ
+            ],
+            'IND': [
+                r'^[A-Z]{2} ?\d{1,2} ?[A-Z]{1,2} ?\d{4}$',  # e.g., DL 8C AA 1234
+            ],
+            'default': [
+                r'^[A-Z0-9\s-]{3,12}$'  # general fallback
+            ]
+        }
 
     def preprocess_plate_image(self, img):
         """Enhanced preprocessing for better OCR accuracy"""
@@ -233,45 +290,234 @@ class EnhancedLicensePlateProcessor:
         
         return [denoised, thresh1, thresh2]
 
-    def license_complies_format(self, text):
-        """Check if the license plate text complies with common formats"""
-        if len(text) < 4 or len(text) > 10:
+    def license_complies_format(self, text, country='auto'):
+        """Check if the license plate text complies with known formats"""
+        if not text or len(text) < 2:
             return False
         
-        # Check for common patterns (adjust based on your region)
-        # Example patterns: ABC123, AB12CD, 12AB34, etc.
-        patterns = [
-            r'^[A-Z]{2,3}[0-9]{2,4}$',  # AA123, AAA1234
-            r'^[0-9]{2,4}[A-Z]{2,3}$',  # 123AA, 1234AAA
-            r'^[A-Z]{2}[0-9]{2}[A-Z]{2}$',  # AB12CD
-            r'^[0-9]{2}[A-Z]{2}[0-9]{2}$',  # 12AB34
-            r'^[A-Z0-9]{4,10}$'  # General alphanumeric
-        ]
+        # Clean the text
+        text = text.strip().upper()
         
-        for pattern in patterns:
-            if re.match(pattern, text):
-                return True
+        # If auto mode, try all patterns
+        if country == 'auto':
+            countries_to_check = list(self.country_patterns.keys())
+        else:
+            countries_to_check = [country] if country in self.country_patterns else ['Generic']
         
-        return False
+        # Check patterns
+        for country_key in countries_to_check:
+            patterns = self.country_patterns.get(country_key, [])
+            for pattern in patterns:
+                try:
+                    if re.match(pattern, text):
+                        return True
+                except:
+                    # Skip patterns with unicode issues
+                    continue
+        
+        if 3 <= len(text) <= 12 and re.match(r'^[A-Z0-9\s-]+$', text):
+            return True
 
-    def format_license(self, text):
-        """Format the license plate text"""
-        # Remove spaces and special characters
-        text = re.sub(r'[^A-Z0-9]', '', text.upper())
+    def read_license_plate(self, license_plate_crop):
+        """Read the license plate text with multi-language support"""
+        if not OCR_AVAILABLE or self.reader is None:
+            return None, None
+
+        try:
+            # Get multiple preprocessed versions
+            preprocessed_images = self.preprocess_plate_image(license_plate_crop)
+            
+            all_detections = []
+            
+            # Try OCR on each preprocessed version
+            for img in preprocessed_images:
+                detections = self.reader.readtext(img)
+                all_detections.extend(detections)
+            
+            # Also try on original
+            detections = self.reader.readtext(license_plate_crop)
+            all_detections.extend(detections)
+
+            best_text = None
+            best_score = 0
+            detected_country = None
+
+            for detection in all_detections:
+                bbox, text, score = detection
+                
+                # Clean the text - preserve original spacing/formatting
+                text_cleaned = text.strip()
+                
+                # Try to preserve unicode characters for non-Latin scripts
+                if not all(ord(char) < 128 for char in text_cleaned):
+                    # Contains non-ASCII characters (likely non-Latin script)
+                    # Minimal cleaning for these
+                    text_upper = text_cleaned
+                else:
+                    # Latin script - convert to uppercase
+                    text_upper = text_cleaned.upper()
+                
+                # Check length and score
+                if len(text_upper) >= 2 and score > 0.3:  # Lower threshold for initial detection
+                    
+                    # Check if it matches any country pattern
+                    country_matched = None
+                    for country, patterns in self.country_patterns.items():
+                        for pattern in patterns:
+                            try:
+                                if re.match(pattern, text_upper):
+                                    country_matched = country
+                                    break
+                            except:
+                                continue
+                        if country_matched:
+                            break
+                    
+                    # Apply corrections if needed
+                    if country_matched or self.license_complies_format(text_upper):
+                        text_corrected = self.apply_ocr_corrections(text_upper)
+                        text_formatted = self.format_license(text_corrected, country_matched)
+                        
+                        # Boost score if it matches a known pattern
+                        adjusted_score = score * 1.2 if country_matched else score
+                        
+                        if adjusted_score > best_score:
+                            best_text = text_formatted
+                            best_score = score
+                            detected_country = country_matched
+
+            # If no pattern matched but we have high confidence text, use it
+            if best_text is None and all_detections:
+                # Get the highest confidence detection
+                for detection in sorted(all_detections, key=lambda x: x[2], reverse=True):
+                    bbox, text, score = detection
+                    if score > 0.6 and len(text.strip()) >= 3:
+                        best_text = self.format_license(text.strip().upper())
+                        best_score = score
+                        break
+
+            return best_text, best_score
+
+        except Exception as e:
+            print(f"OCR error: {e}")
+            return None, None
+
+    def get_car(self, license_plate, vehicle_track_ids):
+        """Retrieve the vehicle coordinates and ID based on the license plate coordinates"""
+        try:
+            if len(license_plate) < 6:
+                return -1, -1, -1, -1, -1
+                
+            x1, y1, x2, y2, score, class_id = license_plate
+
+            # Calculate license plate center
+            plate_cx = (x1 + x2) / 2
+            plate_cy = (y1 + y2) / 2
+
+            best_car = None
+            best_overlap = 0
+
+            for j in range(len(vehicle_track_ids)):
+                if len(vehicle_track_ids[j]) < 5:
+                    continue
+                    
+                xcar1, ycar1, xcar2, ycar2, car_id = vehicle_track_ids[j]
+
+                # Check if plate center is inside vehicle bbox
+                if xcar1 < plate_cx < xcar2 and ycar1 < plate_cy < ycar2:
+                    # Calculate overlap ratio
+                    intersection_x1 = max(x1, xcar1)
+                    intersection_y1 = max(y1, ycar1)
+                    intersection_x2 = min(x2, xcar2)
+                    intersection_y2 = min(y2, ycar2)
+                    
+                    if intersection_x2 > intersection_x1 and intersection_y2 > intersection_y1:
+                        intersection_area = (intersection_x2 - intersection_x1) * (intersection_y2 - intersection_y1)
+                        plate_area = (x2 - x1) * (y2 - y1)
+                        overlap_ratio = intersection_area / plate_area if plate_area > 0 else 0
+                        
+                        if overlap_ratio > best_overlap:
+                            best_overlap = overlap_ratio
+                            best_car = vehicle_track_ids[j]
+
+            if best_car is not None and best_overlap > 0.5:  # At least 50% overlap
+                return best_car
+
+            return -1, -1, -1, -1, -1
+        except Exception as e:
+            print(f"get_car error: {e}")
+            return -1, -1, -1, -1, -1
         
-        # Apply character substitutions for common OCR mistakes
-        corrections = {
-            'O': '0', '0': 'O',  # Context-dependent
-            'I': '1', '1': 'I',
-            'S': '5', '5': 'S',
-            'B': '8', '8': 'B',
-            'G': '6', '6': 'G',
-            'Z': '2', '2': 'Z'
-        }
+    def format_license(self, text, detected_country=None):
+        """Format the license plate text based on detected country patterns"""
+        # Remove special characters but keep spaces and hyphens
+        text = re.sub(r'[^A-Z0-9\s-]', '', text.upper())
         
-        # Simple heuristic: if position should be number/letter
-        # This is region-specific and should be adjusted
-        return text
+        # Try to detect country pattern if not provided
+        if detected_country is None:
+            for country, patterns in self.country_patterns.items():
+                for pattern in patterns:
+                    try:
+                        if re.match(pattern, text):
+                            detected_country = country
+                            break
+                    except:
+                        continue
+                if detected_country:
+                    break
+        
+        # Apply country-specific formatting
+        if detected_country == 'India':
+            # Format: XX 00 XX 0000
+            parts = text.replace(' ', '').replace('-', '')
+            if len(parts) >= 9:
+                formatted = f"{parts[:2]} {parts[2:4]} {parts[4:6]} {parts[6:10]}"
+                return formatted.strip()
+        
+        elif detected_country == 'UK':
+            # Format: XX00 XXX
+            parts = text.replace(' ', '').replace('-', '')
+            if len(parts) == 7:
+                return f"{parts[:4]} {parts[4:]}"
+        
+        elif detected_country == 'Germany':
+            # Format: X XX 0000
+            parts = text.split()
+            if len(parts) >= 2:
+                return ' '.join(parts)
+        
+        # Default: return cleaned text
+        return text.strip()
+
+    def apply_ocr_corrections(self, text, position_hints=None):
+        """Apply character corrections based on position and context"""
+        corrected = list(text)
+        
+        # Simple corrections without position hints
+        if position_hints is None:
+            # Look for common patterns and fix obvious mistakes
+            for i, char in enumerate(corrected):
+                # If we expect a number but got a letter
+                if i > 0 and corrected[i-1].isdigit() and char in 'OQDBG':
+                    if char == 'O' or char == 'Q' or char == 'D':
+                        corrected[i] = '0'
+                    elif char == 'B':
+                        corrected[i] = '8'
+                    elif char == 'G':
+                        corrected[i] = '6'
+                
+                # If we expect a letter but got a number
+                elif i > 0 and corrected[i-1].isalpha() and char in '0156':
+                    if char == '0':
+                        corrected[i] = 'O'
+                    elif char == '1':
+                        corrected[i] = 'I'
+                    elif char == '5':
+                        corrected[i] = 'S'
+                    elif char == '6':
+                        corrected[i] = 'G'
+        
+        return ''.join(corrected)
 
     def read_license_plate(self, license_plate_crop):
         """Read the license plate text from the given cropped image with multiple attempts"""
@@ -377,8 +623,16 @@ app.add_middleware(
 )
 
 class TrafficMonitor:
-    def __init__(self, vehicle_model_path='yolov8n.pt', plate_model_path='license_plate_detector.pt'):
-        """Initialize traffic monitoring system with enhanced tracking"""
+    def __init__(self, vehicle_model_path='yolov8n.pt', plate_model_path='license_plate_detector.pt', 
+                 country='auto', languages=['en']):
+        """Initialize traffic monitoring system with enhanced tracking
+        
+        Args:
+            vehicle_model_path: Path to vehicle detection model
+            plate_model_path: Path to license plate detection model
+            country: Country/region for plate detection ('auto', 'USA', 'India', 'UK', 'Germany', etc.)
+            languages: List of language codes for OCR
+        """
         # Load models
         self.coco_model = YOLO(vehicle_model_path)
         
@@ -392,11 +646,14 @@ class TrafficMonitor:
         # Initialize enhanced tracker
         self.mot_tracker = EnhancedSORTTracker(max_disappeared=50, max_distance=80, min_hits=3)
         
-        # Initialize enhanced license plate processor
-        self.plate_processor = EnhancedLicensePlateProcessor()
+        # Initialize enhanced license plate processor with country/language support
+        self.plate_processor = EnhancedLicensePlateProcessor(languages=languages, country=country)
         
         # Vehicle class IDs in COCO dataset
         self.vehicles = [2, 3, 5, 7]  # car, motorcycle, bus, truck
+        
+        # Country setting
+        self.country = country
         
         # Reset all stats
         self.reset_statistics()
@@ -784,16 +1041,49 @@ class TrafficMonitor:
 
 # Global traffic monitor instance
 traffic_monitor = None
+country_setting = 'auto'
+language_setting = ['en']
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize traffic monitor on startup"""
     global traffic_monitor
     try:
-        traffic_monitor = TrafficMonitor()
-        logger.info("Traffic monitoring system initialized with enhanced tracking and license plate detection")
+        traffic_monitor = TrafficMonitor(country=country_setting, languages=language_setting)
+        logger.info(f"Traffic monitoring system initialized with country: {country_setting}, languages: {language_setting}")
     except Exception as e:
         logger.warning(f"Failed to load models: {str(e)}")
+
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "message": "Traffic Monitoring System with International License Plate Support", 
+        "status": "active",
+        "country": country_setting,
+        "languages": language_setting
+    }
+
+@app.post("/configure")
+async def configure_system(country: str = 'auto', languages: List[str] = None):
+    """Configure the system for specific country/languages"""
+    global traffic_monitor, country_setting, language_setting
+    
+    if languages is None:
+        languages = ['en']
+    
+    country_setting = country
+    language_setting = languages
+    
+    try:
+        traffic_monitor = TrafficMonitor(country=country, languages=languages)
+        return {
+            "status": "success",
+            "message": f"System configured for country: {country}, languages: {languages}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Configuration failed: {str(e)}")
 
 
 @app.get("/")
