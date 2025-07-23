@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/3533d3c1663b49c782ab0d39f258b373/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: 3533d3c1663b49c782ab0d39f258b373
+run_name: flawless-mouse-712
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753274138715
+status: 1
+tags: []
+user_id: priyanshu

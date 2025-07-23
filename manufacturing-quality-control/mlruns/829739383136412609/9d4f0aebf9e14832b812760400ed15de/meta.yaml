@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/9d4f0aebf9e14832b812760400ed15de/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: 9d4f0aebf9e14832b812760400ed15de
+run_name: hilarious-swan-762
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753274123780
+status: 1
+tags: []
+user_id: priyanshu

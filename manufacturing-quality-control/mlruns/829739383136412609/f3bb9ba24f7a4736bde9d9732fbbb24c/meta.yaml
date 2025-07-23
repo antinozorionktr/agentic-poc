@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/f3bb9ba24f7a4736bde9d9732fbbb24c/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: f3bb9ba24f7a4736bde9d9732fbbb24c
+run_name: unique-mule-770
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753273513595
+status: 1
+tags: []
+user_id: priyanshu

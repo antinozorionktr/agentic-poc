@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/bad5421d7ec141bbb4fa2f736acab581/artifacts
+end_time: 1753273346916
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: bad5421d7ec141bbb4fa2f736acab581
+run_name: big-crab-377
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753273346905
+status: 3
+tags: []
+user_id: priyanshu

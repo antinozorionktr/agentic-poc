@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/e8f2d0cb6faf4037bf37dc6984ce4509/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: e8f2d0cb6faf4037bf37dc6984ce4509
+run_name: crawling-doe-548
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753274221534
+status: 1
+tags: []
+user_id: priyanshu

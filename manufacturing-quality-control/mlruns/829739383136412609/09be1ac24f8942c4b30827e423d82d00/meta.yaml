@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/09be1ac24f8942c4b30827e423d82d00/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: 09be1ac24f8942c4b30827e423d82d00
+run_name: nimble-owl-497
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753273665363
+status: 1
+tags: []
+user_id: priyanshu

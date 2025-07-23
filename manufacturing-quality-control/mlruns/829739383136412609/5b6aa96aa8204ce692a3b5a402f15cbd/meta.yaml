@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/5b6aa96aa8204ce692a3b5a402f15cbd/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: 5b6aa96aa8204ce692a3b5a402f15cbd
+run_name: unequaled-sheep-234
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753273964765
+status: 1
+tags: []
+user_id: priyanshu

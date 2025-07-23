@@ -268,6 +268,17 @@ def show_crop_analysis():
     """Crop analysis page"""
     st.markdown("## 📸 Crop Segmentation & Health Analysis")
     
+    # Add tabs for single vs batch analysis
+    tab1, tab2 = st.tabs(["Single Image", "Multiple Images (Batch)"])
+    
+    with tab1:
+        show_single_crop_analysis()
+    
+    with tab2:
+        show_batch_crop_analysis()
+
+def show_single_crop_analysis():
+    """Single image crop analysis"""
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -275,7 +286,8 @@ def show_crop_analysis():
         uploaded_file = st.file_uploader(
             "Choose an image...",
             type=['png', 'jpg', 'jpeg'],
-            help="Upload drone footage or field images for analysis"
+            help="Upload drone footage or field images for analysis",
+            key="single_crop_upload"
         )
         
         if uploaded_file:
@@ -284,17 +296,23 @@ def show_crop_analysis():
             st.image(image, caption="Uploaded Image", use_column_width=True)
             
             # Analysis button
-            if st.button("🔍 Analyze Crops", type="primary"):
+            if st.button("🔍 Analyze Crops", type="primary", key="single_analyze"):
                 with st.spinner("Analyzing crops... This may take a moment."):
-                    # Call segmentation API
-                    files = {"file": uploaded_file.getvalue()}
-                    result = call_api("/analyze/crop-segmentation", method="POST", files={"file": uploaded_file})
-                    
-                    if result:
-                        st.session_state['analysis_result'] = result
-                        st.session_state['original_image'] = image
-                        st.success("✅ Analysis completed!")
-                        st.rerun()
+                    try:
+                        # Reset file pointer and prepare for API call
+                        uploaded_file.seek(0)
+                        
+                        # Prepare files properly for requests
+                        files = {"file": (uploaded_file.name, uploaded_file, uploaded_file.type or "image/jpeg")}
+                        result = call_api("/analyze/crop-segmentation", method="POST", files=files)
+                        
+                        if result:
+                            st.session_state['analysis_result'] = result
+                            st.session_state['original_image'] = image
+                            st.success("✅ Analysis completed!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error during analysis: {str(e)}")
     
     with col2:
         st.markdown("### Analysis Results")
@@ -371,10 +389,211 @@ def show_crop_analysis():
         else:
             st.info("👆 Upload an image and click 'Analyze Crops' to see results here.")
 
+def show_batch_crop_analysis():
+    """Batch crop analysis for multiple images"""
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("### Upload Multiple Images")
+        uploaded_files = st.file_uploader(
+            "Choose images...",
+            type=['png', 'jpg', 'jpeg'],
+            accept_multiple_files=True,
+            help="Upload multiple drone footage or field images for batch analysis",
+            key="batch_crop_upload"
+        )
+        
+        if uploaded_files:
+            st.write(f"**{len(uploaded_files)} images selected:**")
+            for i, file in enumerate(uploaded_files[:3]):  # Show first 3 images
+                col_img1, col_img2 = st.columns([1, 3])
+                with col_img1:
+                    image = Image.open(file)
+                    st.image(image, caption=f"{file.name}", use_column_width=True)
+                with col_img2:
+                    st.write(f"**File:** {file.name}")
+                    st.write(f"**Size:** {len(file.getvalue()) / 1024:.1f} KB")
+            
+            if len(uploaded_files) > 3:
+                st.write(f"... and {len(uploaded_files) - 3} more images")
+            
+            # Batch analysis button
+            if st.button("🔍 Analyze All Images", type="primary", key="batch_analyze"):
+                with st.spinner(f"Analyzing {len(uploaded_files)} images... This may take a few minutes."):
+                    try:
+                        # Prepare files for batch API call
+                        files = []
+                        for file in uploaded_files:
+                            file.seek(0)
+                            files.append(("files", (file.name, file, file.type or "image/jpeg")))
+                        
+                        # Call batch analysis API
+                        import requests
+                        response = requests.post(f"{API_BASE_URL}/analyze/batch-crop-segmentation", files=files)
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            st.session_state['batch_analysis_result'] = result
+                            st.success(f"✅ Batch analysis completed! Processed {result['images_processed']} images.")
+                            st.rerun()
+                        else:
+                            st.error(f"API Error: {response.status_code} - {response.text}")
+                            
+                    except Exception as e:
+                        st.error(f"Error during batch analysis: {str(e)}")
+    
+    with col2:
+        st.markdown("### Batch Analysis Results")
+        
+        if 'batch_analysis_result' in st.session_state:
+            result = st.session_state['batch_analysis_result']
+            
+            # Combined summary metrics
+            st.markdown("#### 📊 Combined Summary")
+            summary = result['combined_health_summary']
+            
+            metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+            with metric_col1:
+                st.metric("Images Processed", f"{summary['images_processed']}/{summary['total_images']}")
+            with metric_col2:
+                st.metric("Total Segments", summary['total_segments'])
+            with metric_col3:
+                st.metric("Total Area", f"{summary['total_area_hectares']:.2f} ha")
+            with metric_col4:
+                avg_health = summary['average_health_score']
+                st.markdown(f"**Avg Health:** {display_health_status(avg_health)}", unsafe_allow_html=True)
+            
+            # Crop distribution
+            if summary['crop_distribution']:
+                st.markdown("#### 🌾 Crop Distribution Across All Images")
+                
+                crop_data = []
+                for crop_type, data in summary['crop_distribution'].items():
+                    crop_data.append({
+                        "Crop Type": crop_type.title(),
+                        "Count": data['count'],
+                        "Total Area (ha)": f"{data['area']:.4f}",
+                        "Avg Health": f"{data['avg_health']:.1f}%"
+                    })
+                
+                df_crops = pd.DataFrame(crop_data)
+                st.dataframe(df_crops, use_container_width=True)
+                
+                # Visualization
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    # Area by crop type
+                    crop_types = [data['Crop Type'] for data in crop_data]
+                    areas = [float(data['Total Area (ha)'].replace(' ha', '')) for data in crop_data]
+                    
+                    fig_area = px.pie(
+                        values=areas,
+                        names=crop_types,
+                        title="Total Area by Crop Type"
+                    )
+                    st.plotly_chart(fig_area, use_container_width=True)
+                
+                with chart_col2:
+                    # Health by crop type
+                    health_scores = [float(data['Avg Health'].replace('%', '')) for data in crop_data]
+                    
+                    fig_health = px.bar(
+                        x=crop_types,
+                        y=health_scores,
+                        title="Average Health by Crop Type",
+                        color=health_scores,
+                        color_continuous_scale="RdYlGn"
+                    )
+                    st.plotly_chart(fig_health, use_container_width=True)
+            
+            # Individual image results
+            st.markdown("#### 📋 Individual Image Results")
+            
+            individual_data = []
+            for img_result in result['individual_results']:
+                status_icon = "✅" if img_result['status'] == 'success' else "❌"
+                individual_data.append({
+                    "Image": f"{status_icon} {img_result['filename']}",
+                    "Segments": img_result['segments_count'],
+                    "Area (ha)": f"{img_result['area']:.4f}",
+                    "Avg Health": f"{img_result.get('average_health', 0):.1f}%" if img_result.get('average_health') else "N/A",
+                    "Diseases": img_result.get('disease_count', 0),
+                    "Crop Types": ", ".join(img_result.get('crop_types', [])) if img_result.get('crop_types') else "None"
+                })
+            
+            df_individual = pd.DataFrame(individual_data)
+            st.dataframe(df_individual, use_container_width=True)
+            
+        else:
+            st.info("👆 Upload multiple images and click 'Analyze All Images' to see batch results here.")
+            st.markdown(f"**Average Health:** {display_health_status(avg_health)}", unsafe_allow_html=True)
+
+            # Detailed analysis
+            st.markdown("#### 📋 Detailed Analysis")
+            analysis_data = []
+            for i, analysis in enumerate(result['analysis']):
+                analysis_data.append({
+                    "Segment": i + 1,
+                    "Crop Type": analysis['crop_type'].title(),
+                    "Area (ha)": f"{analysis['area_hectares']:.4f}",
+                    "Health Score": f"{analysis['health_score']:.1f}%",
+                    "Disease Status": "⚠️ Detected" if analysis['disease_detected'] else "✅ Healthy",
+                    "Confidence": f"{analysis['confidence']:.2f}"
+                })
+            
+            df = pd.DataFrame(analysis_data)
+            st.dataframe(df, use_container_width=True)
+            
+            # Charts
+            if len(result['analysis']) > 1:
+                st.markdown("#### 📊 Health Distribution")
+                
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    # Health score distribution
+                    health_scores = [a['health_score'] for a in result['analysis']]
+                    crop_types = [a['crop_type'] for a in result['analysis']]
+                    
+                    fig_health = px.bar(
+                        x=crop_types,
+                        y=health_scores,
+                        title="Health Scores by Crop Type",
+                        labels={'x': 'Crop Type', 'y': 'Health Score (%)'},
+                        color=health_scores,
+                        color_continuous_scale="RdYlGn"
+                    )
+                    st.plotly_chart(fig_health, use_container_width=True)
+                
+                with chart_col2:
+                    # Area distribution
+                    areas = [a['area_hectares'] for a in result['analysis']]
+                    
+                    fig_area = px.pie(
+                        values=areas,
+                        names=crop_types,
+                        title="Area Distribution by Crop Type"
+                    )
+                    st.plotly_chart(fig_area, use_container_width=True)
+        # else:
+        #     st.info("👆 Upload an image and click 'Analyze Crops' to see results here.")
+
 def show_yield_prediction():
     """Yield prediction page"""
     st.markdown("## 📊 Crop Yield Prediction")
     
+    # Add tabs for single vs batch prediction
+    tab1, tab2 = st.tabs(["Single Image", "Multiple Images (Batch)"])
+    
+    with tab1:
+        show_single_yield_prediction()
+    
+    with tab2:
+        show_batch_yield_prediction()
+
+def show_single_yield_prediction():
+    """Single image yield prediction"""
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -382,22 +601,29 @@ def show_yield_prediction():
         uploaded_file = st.file_uploader(
             "Upload image for yield analysis...",
             type=['png', 'jpg', 'jpeg'],
-            key="yield_upload"
+            key="single_yield_upload"
         )
         
         if uploaded_file:
             image = Image.open(uploaded_file)
             st.image(image, caption="Field Image", use_column_width=True)
             
-            if st.button("🎯 Predict Yield", type="primary"):
+            if st.button("🎯 Predict Yield", type="primary", key="single_yield_predict"):
                 with st.spinner("Analyzing yield potential..."):
-                    files = {"file": uploaded_file.getvalue()}
-                    result = call_api("/predict/yield", method="POST", files={"file": uploaded_file})
-                    
-                    if result:
-                        st.session_state['yield_result'] = result
-                        st.success("✅ Yield prediction completed!")
-                        st.rerun()
+                    try:
+                        # Reset file pointer and prepare for API call
+                        uploaded_file.seek(0)
+                        
+                        # Prepare files properly for requests
+                        files = {"file": (uploaded_file.name, uploaded_file, uploaded_file.type or "image/jpeg")}
+                        result = call_api("/predict/yield", method="POST", files=files)
+                        
+                        if result:
+                            st.session_state['yield_result'] = result
+                            st.success("✅ Yield prediction completed!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error during yield prediction: {str(e)}")
     
     with col2:
         st.markdown("### Yield Predictions")
@@ -487,6 +713,165 @@ def show_yield_prediction():
                 st.plotly_chart(fig_factors, use_container_width=True)
         else:
             st.info("👆 Upload a field image and click 'Predict Yield' to see predictions here.")
+
+def show_batch_yield_prediction():
+    """Batch yield prediction for multiple images"""
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.markdown("### Upload Multiple Field Images")
+        uploaded_files = st.file_uploader(
+            "Choose field images...",
+            type=['png', 'jpg', 'jpeg'],
+            accept_multiple_files=True,
+            help="Upload multiple field images for batch yield prediction",
+            key="batch_yield_upload"
+        )
+        
+        if uploaded_files:
+            st.write(f"**{len(uploaded_files)} images selected:**")
+            for i, file in enumerate(uploaded_files[:3]):  # Show first 3 images
+                col_img1, col_img2 = st.columns([1, 3])
+                with col_img1:
+                    image = Image.open(file)
+                    st.image(image, caption=f"{file.name}", use_column_width=True)
+                with col_img2:
+                    st.write(f"**File:** {file.name}")
+                    st.write(f"**Size:** {len(file.getvalue()) / 1024:.1f} KB")
+            
+            if len(uploaded_files) > 3:
+                st.write(f"... and {len(uploaded_files) - 3} more images")
+            
+            # Batch yield prediction button
+            if st.button("🎯 Predict Yield for All Images", type="primary", key="batch_yield_predict"):
+                with st.spinner(f"Predicting yield for {len(uploaded_files)} images... This may take a few minutes."):
+                    try:
+                        # Prepare files for batch API call
+                        files = []
+                        for file in uploaded_files:
+                            file.seek(0)
+                            files.append(("files", (file.name, file, file.type or "image/jpeg")))
+                        
+                        # Call batch yield prediction API
+                        import requests
+                        response = requests.post(f"{API_BASE_URL}/predict/batch-yield", files=files)
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            st.session_state['batch_yield_result'] = result
+                            st.success(f"✅ Batch yield prediction completed! Processed {result['images_processed']} images.")
+                            st.rerun()
+                        else:
+                            st.error(f"API Error: {response.status_code} - {response.text}")
+                            
+                    except Exception as e:
+                        st.error(f"Error during batch yield prediction: {str(e)}")
+    
+    with col2:
+        st.markdown("### Batch Yield Predictions")
+        
+        if 'batch_yield_result' in st.session_state:
+            result = st.session_state['batch_yield_result']
+            
+            # Combined yield summary
+            st.markdown("#### 🎯 Combined Yield Summary")
+            total_yield = result['total_estimated_yield']
+            
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            with metric_col1:
+                st.metric("Images Processed", result['images_processed'])
+            with metric_col2:
+                st.metric("Total Estimated Yield", f"{total_yield} tons")
+            with metric_col3:
+                st.metric("Average per Image", f"{total_yield/result['images_processed']:.2f} tons" if result['images_processed'] > 0 else "0 tons")
+            
+            # Combined predictions table
+            if result['combined_predictions']:
+                st.markdown("#### 📋 All Crop Predictions")
+                
+                combined_data = []
+                for i, pred in enumerate(result['combined_predictions']):
+                    combined_data.append({
+                        "Segment": i + 1,
+                        "Crop Type": pred['crop_type'].title(),
+                        "Area (ha)": f"{pred['area_hectares']:.4f}",
+                        "Predicted Yield (tons)": f"{pred['predicted_yield']:.2f}",
+                        "Yield/ha (tons)": f"{pred['predicted_yield']/pred['area_hectares']:.2f}" if pred['area_hectares'] > 0 else "0",
+                        "Confidence": f"{pred['confidence']:.2%}"
+                    })
+                
+                df_combined = pd.DataFrame(combined_data)
+                st.dataframe(df_combined, use_container_width=True)
+                
+                # Combined visualization
+                st.markdown("#### 📊 Combined Yield Analysis")
+                
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    # Yield by crop type (aggregated)
+                    crop_yields = {}
+                    for pred in result['combined_predictions']:
+                        crop_type = pred['crop_type']
+                        if crop_type not in crop_yields:
+                            crop_yields[crop_type] = 0
+                        crop_yields[crop_type] += pred['predicted_yield']
+                    
+                    fig_yield = px.bar(
+                        x=list(crop_yields.keys()),
+                        y=list(crop_yields.values()),
+                        title="Total Yield by Crop Type",
+                        labels={'x': 'Crop Type', 'y': 'Total Yield (tons)'},
+                        color=list(crop_yields.values()),
+                        color_continuous_scale="Viridis"
+                    )
+                    st.plotly_chart(fig_yield, use_container_width=True)
+                
+                with chart_col2:
+                    # Yield distribution pie chart
+                    fig_pie = px.pie(
+                        values=list(crop_yields.values()),
+                        names=list(crop_yields.keys()),
+                        title="Yield Distribution by Crop Type"
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+            
+            # Individual image results
+            st.markdown("#### 📋 Individual Image Results")
+            
+            individual_data = []
+            for img_result in result['individual_results']:
+                individual_data.append({
+                    "Image": img_result['filename'],
+                    "Crops Analyzed": img_result['crops_analyzed'],
+                    "Total Yield (tons)": f"{img_result['total_yield']:.2f}",
+                    "Predictions": len(img_result['predictions'])
+                })
+            
+            df_individual = pd.DataFrame(individual_data)
+            st.dataframe(df_individual, use_container_width=True)
+            
+            # Individual image details (expandable)
+            st.markdown("#### 📖 Detailed Results by Image")
+            for img_result in result['individual_results']:
+                with st.expander(f"📁 {img_result['filename']} - {img_result['total_yield']:.2f} tons"):
+                    if img_result['predictions']:
+                        pred_data = []
+                        for pred in img_result['predictions']:
+                            pred_data.append({
+                                "Crop Type": pred['crop_type'].title(),
+                                "Area (ha)": f"{pred['area_hectares']:.4f}",
+                                "Predicted Yield (tons)": f"{pred['predicted_yield']:.2f}",
+                                "Confidence": f"{pred['confidence']:.2%}"
+                            })
+                        
+                        df_pred = pd.DataFrame(pred_data)
+                        st.dataframe(df_pred, use_container_width=True)
+                    else:
+                        st.write("No crops detected in this image.")
+            
+        else:
+            st.info("👆 Upload multiple field images and click 'Predict Yield for All Images' to see batch predictions here.")
 
 def show_satellite_data():
     """Satellite data processing page"""

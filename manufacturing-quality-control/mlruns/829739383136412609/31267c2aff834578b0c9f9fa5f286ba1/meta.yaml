@@ -1,0 +1,14 @@
+artifact_uri: file:///home/priyanshu/Desktop/Agentic-POCs/manufacturing-quality-control/mlruns/829739383136412609/31267c2aff834578b0c9f9fa5f286ba1/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '829739383136412609'
+lifecycle_stage: active
+run_id: 31267c2aff834578b0c9f9fa5f286ba1
+run_name: lyrical-yak-725
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1753274029635
+status: 1
+tags: []
+user_id: priyanshu
