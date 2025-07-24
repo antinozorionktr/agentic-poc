@@ -237,68 +237,231 @@ class FitnessApp:
                 return None
         return None
     
+    def generate_video_report(self, results):
+        """Generate a detailed PDF or HTML report from video analysis results"""
+        st.info("Report generation feature coming soon!")
+
+    def save_video_results(self, results):
+        """Save video analysis results to file"""
+        try:
+            # Create filename with timestamp
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"video_analysis_results_{timestamp}.json"
+            
+            # Convert results to JSON
+            import json
+            results_json = json.dumps(results, indent=2)
+            
+            # Offer download
+            st.download_button(
+                label="📥 Download Results (JSON)",
+                data=results_json,
+                file_name=filename,
+                mime="application/json"
+            )
+            
+            st.success(f"✅ Results ready for download as {filename}")
+            
+        except Exception as e:
+            st.error(f"Failed to save results: {str(e)}")
+    
     def analyze_uploaded_video(self):
         """Analyze pose from uploaded video file"""
         st.subheader("🎬 Video File Analysis")
         
-        uploaded_video = st.file_uploader(
-            "Upload a workout video",
-            type=['mp4', 'avi', 'mov', 'mkv', 'webm'],
-            help="Upload a video file showing your workout for complete analysis"
+        # Analysis mode selection
+        analysis_mode = st.radio(
+            "Select Analysis Mode",
+            ["Quick Analysis (Faster)", "Debug Analysis with Live Visualization (Detailed)"],
+            help="Quick Analysis processes the video faster but doesn't show live processing. Debug Analysis shows frame-by-frame processing with visual overlays."
         )
         
-        if uploaded_video is not None:
-            # Display video info
-            file_details = {
-                "filename": uploaded_video.name,
-                "filetype": uploaded_video.type,
-                "filesize": uploaded_video.size
-            }
-            st.write("📁 **File Details:**")
-            st.json(file_details)
+        if analysis_mode == "Debug Analysis with Live Visualization (Detailed)":
+            # Import and use the debug analyzer
+            try:
+                from video_debug_analyzer import analyze_video_with_debug
+                analyze_video_with_debug(API_BASE_URL)
+            except ImportError:
+                st.error("Debug analyzer not found. Please ensure video_debug_analyzer.py is in the same directory.")
+                st.info("Falling back to Quick Analysis mode.")
+                analysis_mode = "Quick Analysis (Faster)"
+        
+        if analysis_mode == "Quick Analysis (Faster)":
+            uploaded_video = st.file_uploader(
+                "Upload a workout video",
+                type=['mp4', 'avi', 'mov', 'mkv', 'webm'],
+                help="Upload a video file showing your workout for complete analysis"
+            )
             
-            # Video preview
-            st.video(uploaded_video)
-            
-            # Analysis options
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                analysis_type = st.selectbox(
-                    "Analysis Type",
-                    ["Full Video", "Video Segment"],
-                    help="Choose to analyze the entire video or a specific segment"
-                )
-            
-            with col2:
-                if analysis_type == "Video Segment":
-                    start_time = st.number_input("Start Time (seconds)", min_value=0.0, value=0.0, step=0.5)
-                    end_time = st.number_input("End Time (seconds)", min_value=0.0, value=30.0, step=0.5)
-                else:
-                    start_time = 0.0
-                    end_time = None
-            
-            # Analysis button
-            if st.button("🔍 Analyze Video", type="primary"):
-                with st.spinner("Analyzing video... This may take a few minutes."):
-                    # Reset file pointer
-                    uploaded_video.seek(0)
-                    
-                    if analysis_type == "Full Video":
-                        # Full video analysis
-                        files = {'file': (uploaded_video.name, uploaded_video.read(), uploaded_video.type)}
-                        result, success = self.call_api("analyze_video", "POST", files=files)
+            if uploaded_video is not None:
+                # Display video info
+                file_details = {
+                    "filename": uploaded_video.name,
+                    "filetype": uploaded_video.type,
+                    "filesize": f"{uploaded_video.size / 1024 / 1024:.2f} MB"
+                }
+                st.write("📁 **File Details:**")
+                st.json(file_details)
+                
+                # Video preview
+                st.video(uploaded_video)
+                
+                # Analysis options
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    analysis_type = st.selectbox(
+                        "Analysis Type",
+                        ["Full Video", "Video Segment"],
+                        help="Choose to analyze the entire video or a specific segment"
+                    )
+                
+                with col2:
+                    if analysis_type == "Video Segment":
+                        start_time = st.number_input("Start Time (seconds)", min_value=0.0, value=0.0, step=0.5)
                     else:
-                        # Segment analysis
-                        files = {'file': (uploaded_video.name, uploaded_video.read(), uploaded_video.type)}
-                        # Note: For segment analysis, we'd need to modify the API call to include start/end times
-                        # For now, using full video analysis
-                        result, success = self.call_api("analyze_video", "POST", files=files)
-                    
-                    if success and result.get('success'):
-                        self.display_video_results(result)
+                        start_time = 0.0
+                
+                with col3:
+                    if analysis_type == "Video Segment":
+                        end_time = st.number_input("End Time (seconds)", min_value=0.1, value=30.0, step=0.5)
                     else:
-                        st.error(f"Video analysis failed: {result.get('error', 'Unknown error')}")
+                        end_time = None
+                
+                # Advanced options
+                with st.expander("⚙️ Advanced Options"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        frame_skip = st.slider(
+                            "Frame Skip Rate",
+                            min_value=1,
+                            max_value=10,
+                            value=5,
+                            help="Process every Nth frame. Higher values = faster processing but less detail"
+                        )
+                    with col2:
+                        min_confidence = st.slider(
+                            "Minimum Detection Confidence",
+                            min_value=0.3,
+                            max_value=0.9,
+                            value=0.5,
+                            step=0.1,
+                            help="Minimum confidence threshold for pose detection"
+                        )
+                
+                # Analysis button
+                col1, col2, col3 = st.columns([1, 2, 1])
+                with col2:
+                    if st.button("🔍 Analyze Video", type="primary", use_container_width=True):
+                        # Create progress indicators
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        with st.spinner("Analyzing video... This may take a few minutes."):
+                            # Reset file pointer
+                            uploaded_video.seek(0)
+                            
+                            try:
+                                if analysis_type == "Full Video":
+                                    # Full video analysis
+                                    status_text.text("Uploading video to server...")
+                                    progress_bar.progress(10)
+                                    
+                                    files = {'file': (uploaded_video.name, uploaded_video.read(), uploaded_video.type)}
+                                    
+                                    # Add parameters for advanced options
+                                    params = {
+                                        'frame_skip': frame_skip,
+                                        'min_confidence': min_confidence
+                                    }
+                                    
+                                    status_text.text("Processing video frames...")
+                                    progress_bar.progress(30)
+                                    
+                                    result, success = self.call_api("analyze_video", "POST", files=files)
+                                    
+                                    progress_bar.progress(90)
+                                    
+                                else:
+                                    # Segment analysis
+                                    status_text.text("Processing video segment...")
+                                    progress_bar.progress(10)
+                                    
+                                    # For segment analysis, we need to use a different endpoint or pass parameters
+                                    # Reset file pointer again after reading
+                                    uploaded_video.seek(0)
+                                    
+                                    # If your API supports segment analysis, uncomment and modify:
+                                    # files = {'file': (uploaded_video.name, uploaded_video.read(), uploaded_video.type)}
+                                    # data = {'start_time': start_time, 'end_time': end_time}
+                                    # result, success = self.call_api("analyze_video_segment", "POST", files=files, data=data)
+                                    
+                                    # For now, using full video analysis with a note
+                                    st.warning("Segment analysis is not yet implemented in the API. Analyzing full video instead.")
+                                    files = {'file': (uploaded_video.name, uploaded_video.read(), uploaded_video.type)}
+                                    result, success = self.call_api("analyze_video", "POST", files=files)
+                                    
+                                    progress_bar.progress(90)
+                                
+                                # Clear progress indicators
+                                progress_bar.progress(100)
+                                status_text.text("Analysis complete!")
+                                
+                                # Small delay to show completion
+                                import time
+                                time.sleep(0.5)
+                                
+                                # Clear progress indicators
+                                progress_bar.empty()
+                                status_text.empty()
+                                
+                                if success and result.get('success'):
+                                    st.success("✅ Video analysis completed successfully!")
+                                    
+                                    # Display results
+                                    self.display_video_results(result)
+                                    
+                                    # Additional options after analysis
+                                    st.markdown("---")
+                                    col1, col2, col3 = st.columns(3)
+                                    
+                                    with col1:
+                                        if st.button("📊 Generate Report", type="secondary"):
+                                            self.generate_video_report(result)
+                                    
+                                    with col2:
+                                        if st.button("🔄 Analyze Another Video", type="secondary"):
+                                            st.rerun()
+                                    
+                                    with col3:
+                                        if st.button("💾 Save Results", type="secondary"):
+                                            self.save_video_results(result)
+                                            
+                                else:
+                                    st.error(f"❌ Video analysis failed: {result.get('error', 'Unknown error')}")
+                                    
+                                    # Provide helpful troubleshooting info
+                                    with st.expander("🔧 Troubleshooting"):
+                                        st.write("Common issues:")
+                                        st.write("• **File too large**: Try a shorter video or reduce quality")
+                                        st.write("• **Invalid format**: Ensure the video is in a supported format")
+                                        st.write("• **Server timeout**: The video might be too long for processing")
+                                        st.write("• **API not running**: Check if the backend server is running")
+                                        
+                                        if result.get('error'):
+                                            st.write(f"\n**Error details**: {result['error']}")
+                                            
+                            except Exception as e:
+                                progress_bar.empty()
+                                status_text.empty()
+                                st.error(f"❌ An error occurred: {str(e)}")
+                                
+                                with st.expander("🐛 Error Details"):
+                                    st.write(f"Error type: {type(e).__name__}")
+                                    st.write(f"Error message: {str(e)}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
         
         return None
     
@@ -935,86 +1098,123 @@ class FitnessApp:
             
             st.markdown("---")
             
-def analyze_uploaded_image(self):
-    """Analyze pose from uploaded image"""
-    uploaded_file = st.file_uploader(
-        "Upload an image for pose analysis",
-        type=['jpg', 'jpeg', 'png'],
-        help="Upload a clear image showing your full body in exercise position"
-    )
-
-    if uploaded_file is not None:
-        # Display uploaded image
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", width=300)
-
-        # Reset file pointer to beginning
-        uploaded_file.seek(0)
-
-        # Send to API with proper file handling
-        files = {'file': (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
-        result, success = self.call_api("analyze_pose", "POST", files=files)
-
-        if success and result.get('success'):
-            return result
-        else:
-            st.error(f"Pose analysis failed: {result.get('error', 'Unknown error')}")
-            return None
-
-    # The rest of the UI should still be shown, even if no file is uploaded
-    st.markdown("---")
-
-    # Exercise selection
-    st.subheader("Target Exercise")
-    target_exercise = st.selectbox(
-        "Select target exercise",
-        ["Auto-detect", "Pushup", "Squat", "Pullup", "Plank", "Yoga Poses"]
-    )
-
-    # Workout intensity
-    st.subheader("Intensity Level")
-    intensity = st.slider("Set intensity level", 1, 10, 5)
-
-    st.markdown("---")
-
-    # Quick stats
-    if st.session_state.get("total_reps"):
-        st.subheader("Quick Stats")
-        for exercise, count in st.session_state.total_reps.items():
-            if count > 0:
-                st.metric(exercise.title(), count)
-
-    # Analysis options
-    analysis_modes = [
-        "Live Video (WebRTC)",
-        "Webcam Analysis",
-        "Upload Video",
-        "Camera Snapshot",
-        "Upload Image",
-        "View Stats Only"
-    ]
-    if not WEBRTC_AVAILABLE:
-        analysis_modes[0] = "Live Video (WebRTC) - Not Available"
-
-    analysis_mode = st.selectbox("Choose Analysis Mode", analysis_modes)
-
-    # Workout controls
-    st.markdown("---")
-    self.workout_controls()
-
-    # Exercise guides
-    st.markdown("---")
-    self.display_exercise_guide()
-
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-        <div style="text-align: center; color: #666; padding: 2rem;">
-            <p>🤖 Powered by YOLOv8 + MediaPipe + FastAPI + Streamlit</p>
-            <p>Keep pushing your limits! 💪</p>
-        </div>
-    """, unsafe_allow_html=True)
-
+            # Exercise selection
+            st.subheader("Target Exercise")
+            target_exercise = st.selectbox(
+                "Select target exercise",
+                ["Auto-detect", "Pushup", "Squat", "Pullup", "Plank", "Yoga Poses"]
+            )
+            
+            # Workout intensity
+            st.subheader("Intensity Level")
+            intensity = st.slider("Set intensity level", 1, 10, 5)
+            
+            st.markdown("---")
+            
+            # Quick stats
+            if st.session_state.get("total_reps"):
+                st.subheader("Quick Stats")
+                for exercise, count in st.session_state.total_reps.items():
+                    if count > 0:
+                        st.metric(exercise.title(), count)
+        
+        # Main content area
+        st.markdown("---")
+        
+        # Analysis options
+        analysis_modes = [
+            "Upload Image",
+            "Camera Snapshot", 
+            "Upload Video",
+            "Webcam Analysis",
+            "Live Video (WebRTC)",
+            "View Stats Only"
+        ]
+        
+        if not WEBRTC_AVAILABLE:
+            analysis_modes[4] = "Live Video (WebRTC) - Not Available"
+        
+        selected_mode = st.selectbox("Choose Analysis Mode", analysis_modes)
+        
+        st.markdown("---")
+        
+        # Handle different analysis modes
+        if selected_mode == "Upload Image":
+            st.subheader("📸 Image Analysis")
+            result = self.analyze_uploaded_image()
+            if result:
+                self.display_pose_results(result)
+        
+        elif selected_mode == "Camera Snapshot":
+            st.subheader("📷 Camera Snapshot")
+            result = self.analyze_pose_from_camera()
+            if result:
+                self.display_pose_results(result)
+        
+        elif selected_mode == "Upload Video":
+            self.analyze_uploaded_video()
+        
+        elif selected_mode == "Webcam Analysis":
+            self.webcam_analysis()
+        
+        elif selected_mode == "Live Video (WebRTC)":
+            if WEBRTC_AVAILABLE:
+                self.live_video_analysis()
+            else:
+                st.error("WebRTC is not available. Please install: `pip install streamlit-webrtc aiortc`")
+        
+        elif selected_mode == "View Stats Only":
+            self.display_workout_stats()
+        
+        # Display current workout statistics
+        st.markdown("---")
+        st.subheader("📊 Current Session Statistics")
+        self.display_workout_stats()
+        
+        # Workout controls
+        st.markdown("---")
+        self.workout_controls()
+        
+        # Exercise guides
+        st.markdown("---")
+        self.display_exercise_guide()
+        
+        # Footer
+        st.markdown("---")
+        st.markdown("""
+            <div style="text-align: center; color: #666; padding: 2rem;">
+                <p>🤖 Powered by YOLOv8 + MediaPipe + FastAPI + Streamlit</p>
+                <p>Keep pushing your limits! 💪</p>
+            </div>
+        """, unsafe_allow_html=True)
+            
+    def analyze_uploaded_image(self):
+        """Analyze pose from uploaded image"""
+        uploaded_file = st.file_uploader(
+            "Upload an image for pose analysis",
+            type=['jpg', 'jpeg', 'png'],
+            help="Upload a clear image showing your full body in exercise position"
+        )
+        
+        if uploaded_file is not None:
+            # Display uploaded image
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Uploaded Image", width=300)
+            
+            # Reset file pointer to beginning
+            uploaded_file.seek(0)
+            
+            # Send to API with proper file handling
+            files = {'file': (uploaded_file.name, uploaded_file.read(), uploaded_file.type)}
+            result, success = self.call_api("analyze_pose", "POST", files=files)
+            
+            if success and result.get('success'):
+                return result
+            else:
+                st.error(f"Pose analysis failed: {result.get('error', 'Unknown error')}")
+                return None
+        
+        return None
 
 if __name__ == "__main__":
     app = FitnessApp()
