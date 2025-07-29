@@ -1,6 +1,3 @@
-# Agricultural Monitoring Platform with YOLOv8 Segmentation
-# Complete implementation with FastAPI, PostgreSQL, and GDAL
-
 import os
 import cv2
 import numpy as np
@@ -38,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Database Configuration
-DATABASE_URL = "postgresql://username:password@localhost/agri_monitoring"
+DATABASE_URL = "postgresql://postgres:1234@localhost/agri_monitoring"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
