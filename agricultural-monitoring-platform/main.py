@@ -7,8 +7,6 @@ from typing import List, Dict, Optional, Tuple
 import asyncio
 import logging
 from pathlib import Path
-
-# FastAPI and database imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, Boolean
@@ -16,8 +14,6 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from pydantic import BaseModel
 import psycopg2
-
-# Computer vision and geospatial imports
 from ultralytics import YOLO
 import rasterio
 from rasterio.warp import transform_bounds
@@ -25,28 +21,24 @@ from rasterio.features import shapes
 import geopandas as gpd
 from shapely.geometry import shape, Point, Polygon
 import folium
-
-# GDAL setup
 from osgeo import gdal, ogr, osr
+
 gdal.UseExceptions()
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Database Configuration
 DATABASE_URL = "postgresql://postgres:1234@localhost/agri_monitoring"
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Database Models
 class CropField(Base):
     __tablename__ = "crop_fields"
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    geometry = Column(Text)  # Store as WKT
+    geometry = Column(Text)
     crop_type = Column(String)
     area_hectares = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -62,14 +54,13 @@ class CropAnalysis(Base):
     predicted_yield = Column(Float)
     disease_detected = Column(Boolean, default=False)
     disease_type = Column(String, nullable=True)
-    segmentation_results = Column(Text)  # JSON string
+    segmentation_results = Column(Text)
     ndvi_avg = Column(Float)
     ndvi_std = Column(Float)
 
-# Pydantic models for API
 class FieldCreate(BaseModel):
     name: str
-    geometry: str  # WKT format
+    geometry: str
     crop_type: str
     area_hectares: float
 
@@ -82,7 +73,6 @@ class AnalysisResult(BaseModel):
     ndvi_avg: float
     recommendations: List[str]
 
-# Agricultural Monitoring Core Class
 class AgriculturalMonitor:
     def __init__(self, model_path: str = "yolov8n-seg.pt"):
         """Initialize the agricultural monitoring system"""
@@ -96,7 +86,6 @@ class AgriculturalMonitor:
             5: 'diseased_crop'
         }
         
-        # Health thresholds
         self.health_thresholds = {
             'excellent': 0.8,
             'good': 0.6,
@@ -108,19 +97,15 @@ class AgriculturalMonitor:
         """Preprocess Sentinel-2 satellite imagery"""
         try:
             with rasterio.open(image_path) as src:
-                # Read RGB bands (typically bands 4, 3, 2 for Sentinel-2)
                 red = src.read(4)
                 green = src.read(3)
                 blue = src.read(2)
-                nir = src.read(8)  # Near-infrared band
+                nir = src.read(8)
                 
-                # Stack bands
                 rgb = np.stack([red, green, blue], axis=-1)
                 
-                # Normalize to 0-255
                 rgb = ((rgb - rgb.min()) / (rgb.max() - rgb.min()) * 255).astype(np.uint8)
                 
-                # Calculate NDVI
                 ndvi = self.calculate_ndvi(red, nir)
                 
                 return rgb, ndvi
@@ -186,7 +171,6 @@ class AgriculturalMonitor:
                 'max': float(np.max(valid_ndvi))
             }
             
-            # Health score based on NDVI
             ndvi_mean = health_metrics['ndvi_stats']['mean']
             if ndvi_mean > 0.6:
                 health_score = 0.9
@@ -197,7 +181,6 @@ class AgriculturalMonitor:
             else:
                 health_score = 0.3
             
-            # Check for disease indicators in segmentation
             diseased_pixels = 0
             total_crop_pixels = 0
             
@@ -214,7 +197,6 @@ class AgriculturalMonitor:
             
             health_metrics['overall_health'] = health_score
             
-            # Identify stress indicators
             if ndvi_mean < 0.2:
                 health_metrics['stress_indicators'].append('Low vegetation index')
             if health_metrics['ndvi_stats']['std'] > 0.3:
@@ -231,7 +213,6 @@ class AgriculturalMonitor:
     def predict_yield(self, health_score: float, area_hectares: float, 
                      crop_type: str) -> float:
         """Predict crop yield based on health metrics and historical data"""
-        # Base yield per hectare by crop type (kg/ha)
         base_yields = {
             'wheat': 3000,
             'corn': 9000,
@@ -243,7 +224,6 @@ class AgriculturalMonitor:
         
         base_yield = base_yields.get(crop_type.lower(), base_yields['default'])
         
-        # Adjust yield based on health score
         predicted_yield = base_yield * health_score * area_hectares
         
         return predicted_yield

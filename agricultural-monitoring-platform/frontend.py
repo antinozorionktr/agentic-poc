@@ -1,6 +1,3 @@
-# Agricultural Monitoring Platform - Streamlit Frontend
-# Complete web interface for the agricultural monitoring system
-
 import streamlit as st
 import pandas as pd
 import numpy as np
